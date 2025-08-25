@@ -1,14 +1,17 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+# handlers/messages.py
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
 from db import get_role, get_suppliers
 
-async def message_handler(update, context):
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений от пользователей"""
     user_id = update.message.from_user.id
     text = update.message.text
     pool = context.bot_data['pool']
 
     role = await get_role(pool, user_id)
 
-    # Менеджер создаёт запрос
+    # ----------------- Менеджер создает запрос -----------------
     if context.user_data.get('creating_request'):
         context.user_data['creating_request'] = False
         async with pool.acquire() as conn:
@@ -22,22 +25,28 @@ async def message_handler(update, context):
             await context.bot.send_message(s_id, f"Новый запрос: {text}", reply_markup=InlineKeyboardMarkup(kb))
         await update.message.reply_text("Запрос отправлен поставщикам!")
 
-    # Поставщик делает предложение
+    # ----------------- Поставщик делает предложение -----------------
     elif 'current_request' in context.user_data:
         req_id = context.user_data.pop('current_request')
         try:
             description, price = map(str.strip, text.split(",", 1))
             price = float(price)
-            if price <= 0: raise ValueError()
+            if price <= 0:
+                raise ValueError()
         except:
             await update.message.reply_text("Неверный формат. Используйте: описание, цена (цена > 0)")
             return
+
         async with pool.acquire() as conn:
             prop_id = await conn.fetchval(
                 "INSERT INTO offers(request_id, supplier_id, content, price) VALUES($1,$2,$3,$4) RETURNING id",
                 req_id, user_id, description, price
             )
             mgr_id = await conn.fetchval("SELECT manager_id FROM requests WHERE id=$1", req_id)
-        kb = [[InlineKeyboardButton("Заказать", callback_data=f"order_offer:{prop_id}"),
-               InlineKeyboardButton("Отклонить", callback_data=f"reject_offer:{prop_id}")]]
-        await context.bot.send_message(mgr_id, f"Поступило предложение: {description}, {price}", reply_markup=Inline
+
+        kb = [[
+            InlineKeyboardButton("Заказать", callback_data=f"order_offer:{prop_id}"),
+            InlineKeyboardButton("Отклонить", callback_data=f"reject_offer:{prop_id}")
+        ]]
+        await context.bot.send_message(mgr_id, f"Поступило предложение: {description}, {price}", reply_markup=InlineKeyboardMarkup(kb))
+        await update.message.reply_text("Предложение отправлено менеджеру!")

@@ -1,22 +1,29 @@
-# handlers/registration.py
+# handlers/start.py
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, CommandHandler, filters
+from telegram.ext import (
+    ContextTypes, ConversationHandler, CallbackQueryHandler,
+    MessageHandler, CommandHandler, filters
+)
 from db import add_user
+from menus import menu_for_role
 
+# Состояния ConversationHandler
 ROLE, EXTRA_INFO = range(2)
 
+ADMIN_IDS = [374728252]
 
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Начало регистрации пользователя, выбор роли"""
+    """Стартовая команда: проверка роли или начало регистрации"""
     user_id = update.message.from_user.id
     pool = context.bot_data['pool']
 
-    # Проверка на админа
-    if user_id in context.bot_data.get("ADMIN_IDS", []):
+    # Если админ
+    if user_id in ADMIN_IDS:
         await add_user(pool, user_id, update.message.from_user.username, "admin", "Admin")
-        await update.message.reply_text("Вы админ! Вот ваше меню:")
+        await update.message.reply_text("Вы админ! Вот ваше меню:", reply_markup=menu_for_role("admin"))
         return ConversationHandler.END
 
+    # Если обычный юзер — предлагаем выбор роли
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("Менеджер", callback_data="role_manager")],
         [InlineKeyboardButton("Поставщик", callback_data="role_supplier")]
@@ -26,22 +33,20 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def role_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка выбора роли пользователем"""
+    """Обработка выбора роли"""
     query = update.callback_query
     await query.answer()
-
     if query.data == "role_manager":
         context.user_data['role'] = "manager"
         await query.message.reply_text("Введите ваше имя:")
     else:
         context.user_data['role'] = "supplier"
         await query.message.reply_text("Введите название вашей компании:")
-
     return EXTRA_INFO
 
 
 async def extra_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Сохранение дополнительной информации и завершение регистрации"""
+    """Сохраняем дополнительную информацию о пользователе"""
     user_id = update.message.from_user.id
     username = update.message.from_user.username
     extra_info = update.message.text
@@ -50,7 +55,8 @@ async def extra_info_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     await add_user(pool, user_id, username, role, extra_info)
     await update.message.reply_text(
-        f"Регистрация завершена. Ваша роль: {role}."
+        f"Регистрация завершена. Ваша роль: {role}.",
+        reply_markup=menu_for_role(role)
     )
     return ConversationHandler.END
 
@@ -61,7 +67,7 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-def get_registration_handler():
+def get_conversation_handler():
     """Возвращает ConversationHandler для регистрации"""
     return ConversationHandler(
         entry_points=[MessageHandler(filters.COMMAND & filters.Regex("^/start$"), start_handler)],
