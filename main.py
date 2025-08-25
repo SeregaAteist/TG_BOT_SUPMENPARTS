@@ -56,20 +56,9 @@ async def main():
 
 # Запуск в Railway (или локально)
 if __name__ == "__main__":
-    try:
-        loop = asyncio.get_event_loop()
-        # запускаем main как таск
-        loop.create_task(main())
-        # держим loop живым
-        loop.run_forever()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Завершение по сигналу.")
-    finally:
-        try:
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        except Exception:
-            pass
-        logger.info("Event loop остановлен.")
+    import asyncio
+    import nest_asyncio
+
+    nest_asyncio.apply()
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
