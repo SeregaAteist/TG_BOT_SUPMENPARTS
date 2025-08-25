@@ -1,17 +1,15 @@
 # handlers/messages.py
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from db import get_role, get_suppliers
 
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка текстовых сообщений от пользователей"""
+async def message_handler(update, context):
     user_id = update.message.from_user.id
     text = update.message.text
     pool = context.bot_data['pool']
 
     role = await get_role(pool, user_id)
 
-    # ----------------- Менеджер создает запрос -----------------
+    # Менеджер создаёт запрос
     if context.user_data.get('creating_request'):
         context.user_data['creating_request'] = False
         async with pool.acquire() as conn:
@@ -25,7 +23,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(s_id, f"Новый запрос: {text}", reply_markup=InlineKeyboardMarkup(kb))
         await update.message.reply_text("Запрос отправлен поставщикам!")
 
-    # ----------------- Поставщик делает предложение -----------------
+    # Поставщик делает предложение
     elif 'current_request' in context.user_data:
         req_id = context.user_data.pop('current_request')
         try:
@@ -43,7 +41,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 req_id, user_id, description, price
             )
             mgr_id = await conn.fetchval("SELECT manager_id FROM requests WHERE id=$1", req_id)
-
         kb = [[
             InlineKeyboardButton("Заказать", callback_data=f"order_offer:{prop_id}"),
             InlineKeyboardButton("Отклонить", callback_data=f"reject_offer:{prop_id}")
