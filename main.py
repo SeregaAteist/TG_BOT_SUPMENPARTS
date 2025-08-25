@@ -3,56 +3,72 @@ import os
 import logging
 import nest_asyncio
 import asyncio
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, MessageHandler, filters
 
-from db import get_db_pool, init_db
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, MessageHandler, filters, CommandHandler
+
+from db import get_db_pool, init_db, close_pool
 from handlers.start import get_conversation_handler
 from handlers.buttons import button_handler
 from handlers.messages import message_handler
 from utils.logging_setup import setup_logging
 
-# Настройка логов
+# Логи
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Разрешаем вложенные event loop для Railway / CI
+# Разрешаем вложенные loop (Railway-friendly)
 nest_asyncio.apply()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not BOT_TOKEN or not DATABASE_URL:
-    logger.error("BOT_TOKEN или DATABASE_URL не заданы в переменных окружения")
+    logger.error("BOT_TOKEN или DATABASE_URL не заданы")
     raise RuntimeError("BOT_TOKEN или DATABASE_URL не заданы")
 
-async def main():
-    logger.info("Создаём пул подключений к БД...")
-    pool = await get_db_pool()
-    await init_db(pool)
-    logger.info("Пул и таблицы готовы")
+# Глобальная переменная для пула (чтобы можно было при необходимости закрыть)
+GLOBAL_DB_POOL = None
 
+async def _start_app():
+    global GLOBAL_DB_POOL
+    # Создаём пул с retry
+    pool = await get_db_pool()
+    GLOBAL_DB_POOL = pool
+    await init_db(pool)
+
+    # Создаём приложение
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.bot_data['pool'] = pool
 
-    # ConversationHandler для регистрации
-    conv_handler = get_conversation_handler()
-    app.add_handler(conv_handler)
-
-    # Callback и Message хендлеры
+    # Регистрируем handlers
+    app.add_handler(get_conversation_handler())
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    # Healthcheck
+    # Простая команда healthcheck
     async def ping(update, context):
         await update.message.reply_text("PONG")
-
-    from telegram.ext import CommandHandler
     app.add_handler(CommandHandler("ping", ping))
 
     logger.info("Запускаем polling...")
     await app.run_polling()
-    await pool.close()
+    logger.info("Polling завершился, закрываем пул...")
+    await close_pool(pool)
+
+def run():
+    # Запуск main как таск в уже существующем loop (Railway-friendly)
+    loop = asyncio.get_event_loop()
+    loop.create_task(_start_app())
+    try:
+        loop.run_forever()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Получен сигнал завершения, пытаемся аккуратно закрыть пул...")
+        # Закрываем пул синхронно
+        try:
+            if GLOBAL_DB_POOL is not None:
+                loop.run_until_complete(close_pool(GLOBAL_DB_POOL))
+        except Exception as e:
+            logger.warning(f"Ошибка при закрытии пула: {e!r}")
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    run()
