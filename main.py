@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # nest_asyncio позволяет корректно встраивать наш loop в такое окружение.
 nest_asyncio.apply()
 
-# Читаем переменные окружения (они уже проверяются в db.py, но дублируем для удобства)
+# Читаем переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -42,9 +42,6 @@ async def main():
     # Кладём пул в bot_data чтобы хендлеры могли достать
     app.bot_data['pool'] = pool
 
-    # Если нужно — список админов можно положить так (если у тебя есть в конфиге)
-    # app.bot_data['ADMIN_IDS'] = [374728252]
-
     # Регистрируем ConversationHandler для регистрации (из handlers.start)
     conv = get_conversation_handler()
     app.add_handler(conv)
@@ -53,28 +50,26 @@ async def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    logger.info("Запускаем polling...")
-    # Запускаем polling (await внутри async main)
+    logger.info("Бот запущен...")
     await app.run_polling()
-    # После завершения (если ever) закроем пул
     await pool.close()
 
 # Запуск в Railway (или локально)
 if __name__ == "__main__":
-    # В Railway часто уже есть running loop — используем run_until_complete
-    loop = asyncio.get_event_loop()
     try:
-        loop.run_until_complete(main())
+        loop = asyncio.get_event_loop()
+        # запускаем main как таск
+        loop.create_task(main())
+        # держим loop живым
+        loop.run_forever()
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Завершение работы (SIGINT/SIGTERM).")
+        logger.info("Завершение по сигналу.")
     finally:
-        # на всякий случай — закрыть loop корректно
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
         try:
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
             loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
         except Exception:
             pass
-        loop.close()
-        logger.info("Event loop закрыт.")
+        logger.info("Event loop остановлен.")
