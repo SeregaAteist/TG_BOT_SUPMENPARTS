@@ -1,15 +1,11 @@
 # handlers/messages.py
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from db import get_role, get_suppliers
-import logging
-
-logger = logging.getLogger(__name__)
 
 async def message_handler(update, context):
     user_id = update.message.from_user.id
     text = update.message.text
     pool = context.bot_data['pool']
-
     role = await get_role(pool, user_id)
 
     if context.user_data.get('creating_request'):
