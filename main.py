@@ -6,20 +6,15 @@ import nest_asyncio
 
 from telegram.ext import ApplicationBuilder, CallbackQueryHandler, MessageHandler, filters
 
-# наши модули
 from db import get_db_pool, init_db, close_pool
 from handlers.start import get_conversation_handler
 from handlers.buttons import button_handler
 from handlers.messages import message_handler
 
-# Логи
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# patch event loop (Railway любит "уже запущен event loop")
 nest_asyncio.apply()
 
-# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -27,8 +22,14 @@ if not BOT_TOKEN or not DATABASE_URL:
     logger.error("BOT_TOKEN или DATABASE_URL не заданы")
     raise RuntimeError("BOT_TOKEN или DATABASE_URL не заданы")
 
+# Список админов — можно хранить в ENV и парсить, тут простой пример
+DEFAULT_ADMINS = os.getenv("ADMIN_IDS", "374728252")  # строка "id1,id2"
+ADMIN_IDS = []
+try:
+    ADMIN_IDS = [int(x.strip()) for x in DEFAULT_ADMINS.split(",") if x.strip()]
+except Exception:
+    ADMIN_IDS = [374728252]
 
-# ----------------- Основная корутина -----------------
 async def main():
     logger.info("Создание пула подключений...")
     pool = await get_db_pool()
@@ -37,10 +38,10 @@ async def main():
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.bot_data["pool"] = pool
+    app.bot_data["ADMIN_IDS"] = ADMIN_IDS
 
-    # handlers
-    conv = get_conversation_handler()
-    app.add_handler(conv)
+    # Регистрация хендлеров
+    app.add_handler(get_conversation_handler())
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
@@ -50,8 +51,6 @@ async def main():
     finally:
         await close_pool(pool)
 
-
-# ----------------- Запуск -----------------
 if __name__ == "__main__":
     nest_asyncio.apply()
     loop = asyncio.get_event_loop()

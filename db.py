@@ -3,9 +3,10 @@ import os
 import asyncpg
 import logging
 import asyncio
+import traceback
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("db")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
@@ -83,18 +84,27 @@ async def close_pool(pool: asyncpg.pool.Pool):
 # ----------------- Утилиты для хендлеров -----------------
 async def add_user(pool: asyncpg.pool.Pool, telegram_id: int, username: Optional[str], role: str, extra_info: Optional[str] = None):
     """
-    Добавляет пользователя или обновляет существующего по telegram_id.
+    Добавляет или обновляет пользователя по telegram_id.
     """
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            INSERT INTO users(telegram_id, username, role, extra_info)
-            VALUES($1, $2, $3, $4)
-            ON CONFLICT (telegram_id) DO UPDATE
-              SET username = EXCLUDED.username,
-                  role = EXCLUDED.role,
-                  extra_info = EXCLUDED.extra_info
-        """, telegram_id, username, role, extra_info)
-    logger.info(f"add_user: {telegram_id} role={role} info={extra_info}")
+    sql = """
+        INSERT INTO users(telegram_id, username, role, extra_info)
+        VALUES($1, $2, $3, $4)
+        ON CONFLICT (telegram_id) DO UPDATE
+          SET username = EXCLUDED.username,
+              role = EXCLUDED.role,
+              extra_info = EXCLUDED.extra_info
+    """
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(sql, telegram_id, username, role, extra_info)
+        logger.info(f"add_user: ok {telegram_id} role={role} info={extra_info}")
+    except Exception as e:
+        logger.error("add_user: ERROR executing SQL")
+        logger.error("SQL: %s", sql)
+        logger.error("ARGS: %r, %r, %r, %r", telegram_id, username, role, extra_info)
+        logger.error("Exception: %s", e)
+        logger.error("Traceback:\n" + traceback.format_exc())
+        raise
 
 async def get_role(pool: asyncpg.pool.Pool, telegram_id: int) -> Optional[str]:
     async with pool.acquire() as conn:
@@ -113,7 +123,6 @@ async def get_suppliers(pool: asyncpg.pool.Pool):
         rows = await conn.fetch("SELECT telegram_id FROM users WHERE role='supplier'")
         return [r['telegram_id'] for r in rows]
 
-# ----------------- Простейшие операции для requests/offers -----------------
 async def create_request(pool: asyncpg.pool.Pool, manager_id: int, content: str) -> int:
     async with pool.acquire() as conn:
         req_id = await conn.fetchval(
@@ -130,7 +139,6 @@ async def create_offer(pool: asyncpg.pool.Pool, request_id: int, supplier_id: in
         )
         return offer_id
 
-# Optional: other helpers you might need later
 async def get_offers_for_request(pool: asyncpg.pool.Pool, request_id: int):
     async with pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM offers WHERE request_id=$1", request_id)
