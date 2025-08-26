@@ -1,24 +1,25 @@
 # main.py
 import os
 import logging
-import nest_asyncio
 import asyncio
+import nest_asyncio
 
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, MessageHandler, filters, CommandHandler
+from telegram.ext import ApplicationBuilder, CallbackQueryHandler, MessageHandler, filters
 
+# наши модули
 from db import get_db_pool, init_db, close_pool
 from handlers.start import get_conversation_handler
 from handlers.buttons import button_handler
 from handlers.messages import message_handler
-from utils.logging_setup import setup_logging
 
 # Логи
-setup_logging()
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Разрешаем вложенные loop (Railway-friendly)
+# patch event loop (Railway любит "уже запущен event loop")
 nest_asyncio.apply()
 
+# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -26,58 +27,44 @@ if not BOT_TOKEN or not DATABASE_URL:
     logger.error("BOT_TOKEN или DATABASE_URL не заданы")
     raise RuntimeError("BOT_TOKEN или DATABASE_URL не заданы")
 
-# Глобальная переменная для пула (чтобы можно было при необходимости закрыть)
-GLOBAL_DB_POOL = None
 
-async def _start_app():
-    global GLOBAL_DB_POOL
-    # Создаём пул с retry
+# ----------------- Основная корутина -----------------
+async def main():
+    logger.info("Создание пула подключений...")
     pool = await get_db_pool()
-    GLOBAL_DB_POOL = pool
     await init_db(pool)
+    logger.info("БД готова")
 
-    # Создаём приложение
     app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.bot_data['pool'] = pool
+    app.bot_data["pool"] = pool
 
-    # Регистрируем handlers
-    app.add_handler(get_conversation_handler())
+    # handlers
+    conv = get_conversation_handler()
+    app.add_handler(conv)
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
 
-    # Простая команда healthcheck
-    async def ping(update, context):
-        await update.message.reply_text("PONG")
-    app.add_handler(CommandHandler("ping", ping))
-
-    logger.info("Запускаем polling...")
-    await app.run_polling()
-    logger.info("Polling завершился, закрываем пул...")
-    await close_pool(pool)
-
-def run():
-    # Запуск main как таск в уже существующем loop (Railway-friendly)
-    loop = asyncio.get_event_loop()
-    loop.create_task(_start_app())
+    logger.info("Бот запущен...")
     try:
-        loop.run_forever()
-    except (KeyboardInterrupt, SystemExit):
-        logger.info("Получен сигнал завершения, пытаемся аккуратно закрыть пул...")
-        # Закрываем пул синхронно
-        try:
-            if GLOBAL_DB_POOL is not None:
-                loop.run_until_complete(close_pool(GLOBAL_DB_POOL))
-        except Exception as e:
-            logger.warning(f"Ошибка при закрытии пула: {e!r}")
+        await app.run_polling()
+    finally:
+        await close_pool(pool)
 
+
+# ----------------- Запуск -----------------
 if __name__ == "__main__":
-    import nest_asyncio
     nest_asyncio.apply()
-
-    import asyncio
     loop = asyncio.get_event_loop()
-    loop.create_task(main())
     try:
-        loop.run_forever()
+        loop.run_until_complete(main())
     except (KeyboardInterrupt, SystemExit):
-        pass
+        logger.info("Остановка по сигналу")
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        try:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        except Exception:
+            pass
+        logger.info("Event loop остановлен")
