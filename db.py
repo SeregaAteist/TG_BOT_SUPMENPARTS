@@ -1,6 +1,8 @@
 # db.py
-import os, asyncio, logging
+import os
 import asyncpg
+import logging
+import asyncio
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -11,10 +13,11 @@ if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL не задан")
 
 POOL_MIN_SIZE = int(os.getenv("POOL_MIN_SIZE", "1"))
-POOL_MAX_SIZE = int(os.getenv("POOL_MAX_SIZE", "3"))  # разумное значение для Railway
+POOL_MAX_SIZE = int(os.getenv("POOL_MAX_SIZE", "3"))
 POOL_TIMEOUT = float(os.getenv("POOL_TIMEOUT", "60"))
 POOL_MAX_INACTIVE = float(os.getenv("POOL_MAX_INACTIVE", "300"))
 
+# ----------------- Создание пула с retry/backoff -----------------
 async def get_db_pool(retries: int = 5, initial_delay: float = 1.0) -> asyncpg.pool.Pool:
     delay = initial_delay
     last_exc: Optional[Exception] = None
@@ -38,7 +41,8 @@ async def get_db_pool(retries: int = 5, initial_delay: float = 1.0) -> asyncpg.p
     logger.error("DB pool creation failed after retries")
     raise last_exc
 
-async def init_db(pool):
+# ----------------- Инициализация таблиц -----------------
+async def init_db(pool: asyncpg.pool.Pool):
     async with pool.acquire() as conn:
         await conn.execute("""
         CREATE TABLE IF NOT EXISTS users(
@@ -68,9 +72,66 @@ async def init_db(pool):
         """)
     logger.info("DB init (tables) done")
 
-async def close_pool(pool):
+# ----------------- Закрытие пула -----------------
+async def close_pool(pool: asyncpg.pool.Pool):
     try:
         await pool.close()
         logger.info("DB pool closed")
     except Exception as e:
         logger.warning(f"Error closing pool: {e!r}")
+
+# ----------------- Утилиты для хендлеров -----------------
+async def add_user(pool: asyncpg.pool.Pool, telegram_id: int, username: Optional[str], role: str, extra_info: Optional[str] = None):
+    """
+    Добавляет пользователя или обновляет существующего по telegram_id.
+    """
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO users(telegram_id, username, role, extra_info)
+            VALUES($1, $2, $3, $4)
+            ON CONFLICT (telegram_id) DO UPDATE
+              SET username = EXCLUDED.username,
+                  role = EXCLUDED.role,
+                  extra_info = EXCLUDED.extra_info
+        """, telegram_id, username, role, extra_info)
+    logger.info(f"add_user: {telegram_id} role={role} info={extra_info}")
+
+async def get_role(pool: asyncpg.pool.Pool, telegram_id: int) -> Optional[str]:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT role FROM users WHERE telegram_id=$1", telegram_id)
+        return row['role'] if row else None
+
+async def get_user_by_telegram_id(pool: asyncpg.pool.Pool, telegram_id: int) -> Optional[dict]:
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT telegram_id, username, role, extra_info FROM users WHERE telegram_id=$1", telegram_id)
+        if row:
+            return dict(row)
+        return None
+
+async def get_suppliers(pool: asyncpg.pool.Pool):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT telegram_id FROM users WHERE role='supplier'")
+        return [r['telegram_id'] for r in rows]
+
+# ----------------- Простейшие операции для requests/offers -----------------
+async def create_request(pool: asyncpg.pool.Pool, manager_id: int, content: str) -> int:
+    async with pool.acquire() as conn:
+        req_id = await conn.fetchval(
+            "INSERT INTO requests(manager_id, content) VALUES($1, $2) RETURNING id",
+            manager_id, content
+        )
+        return req_id
+
+async def create_offer(pool: asyncpg.pool.Pool, request_id: int, supplier_id: int, content: str, price: float) -> int:
+    async with pool.acquire() as conn:
+        offer_id = await conn.fetchval(
+            "INSERT INTO offers(request_id, supplier_id, content, price) VALUES($1, $2, $3, $4) RETURNING id",
+            request_id, supplier_id, content, price
+        )
+        return offer_id
+
+# Optional: other helpers you might need later
+async def get_offers_for_request(pool: asyncpg.pool.Pool, request_id: int):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM offers WHERE request_id=$1", request_id)
+        return [dict(r) for r in rows]
