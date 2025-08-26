@@ -30,11 +30,11 @@ echo "Устанавливаем python-telegram-bot, если нужно..."
 pip3 install --upgrade python-telegram-bot==20.3
 
 # Путь к файлу бота
-BOT_PATH="$HOME/telegram-bot/bot.py"
+BOT_PATH="$HOME/telegram-bot/main.py"
 
 if [ ! -f "$BOT_PATH" ]; then
-    echo "Ошибка: файл бота bot.py не найден в $BOT_PATH"
-    echo "Скопируйте bot.py в эту папку: $HOME/telegram-bot/"
+    echo "Ошибка: файл бота main.py не найден в $BOT_PATH"
+    echo "Скопируйте main.py в эту папку: $HOME/telegram-bot/"
     exit 1
 fi
 
