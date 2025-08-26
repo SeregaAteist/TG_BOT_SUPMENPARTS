@@ -71,4 +71,13 @@ def run():
             logger.warning(f"Ошибка при закрытии пула: {e!r}")
 
 if __name__ == "__main__":
-    run()
+    import nest_asyncio
+    nest_asyncio.apply()
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.create_task(main())
+    try:
+        loop.run_forever()
+    except (KeyboardInterrupt, SystemExit):
+        pass
